@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bluefy BLE 스캐너</title>
+
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", sans-serif;
+      margin: 24px;
+      background: #f5f7fb;
+      color: #172033;
+    }
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 13px 16px;
+      font-size: 16px;
+      font-weight: 700;
+      background: #1769e0;
+      color: white;
+      cursor: pointer;
+    }
+    button:disabled { background: #94a3b8; }
+    pre {
+      margin-top: 16px;
+      padding: 16px;
+      min-height: 220px;
+      overflow: auto;
+      white-space: pre-wrap;
+      border-radius: 12px;
+      background: #101827;
+      color: #d9e5f8;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>BLE 기기 검색</h1>
+  <div id="result"></div>
+  <div id="result1"></div>
+
+  <p>버튼을 누르면 Bluefy의 BLE 기기 선택 창이 열립니다.</p>
+
+  <button id="scanButton">주변 BLE 기기 검색</button>
+  <pre id="log">대기 중...</pre>
+
+  <script>
+    const scanButton = document.getElementById("scanButton");
+    const logBox = document.getElementById("log");
+    const myValue = "{{ lis_person_sourcedid }}";
+
+    const resultDiv = document.getElementById('result');
+    const result1Div = document.getElementById('result1');
+
+    let device = null;
+
+    function log(message) {
+      console.log(message);
+      logBox.textContent += "\n" + message;
+    }
+
+    function uuidToString(uuid) {
+      return "0x" + uuid.toString(16).padStart(4, "0");
+    }
+
+    scanButton.addEventListener("click", async () => {
+      logBox.textContent = "";
+      scanButton.disabled = true;
+
+      try {
+        // Bluefy/Web Bluetooth 지원 여부 확인
+        if (!navigator.bluetooth) {
+          throw new Error(
+            "이 브라우저는 Web Bluetooth API를 지원하지 않습니다. iOS에서는 Bluefy 앱으로 페이지를 열어 보세요."
+          );
+        }
+
+        log("BLE 기기 선택 창을 여는 중...");
+
+        /*
+         * acceptAllDevices: true
+         * - 주변의 모든 검색 가능한 BLE 기기를 선택 대상으로 표시합니다.
+         *
+         * optionalServices:
+         * - 연결 후 접근할 GATT 서비스 UUID를 반드시 명시하는 것이 좋습니다.
+         * - 아래는 예시로 Battery Service(0x180F), Device Information(0x180A)를 포함합니다.
+         * - 자체 BLE 기기의 서비스 UUID가 있으면 여기에 추가하세요.
+         */
+        device = await navigator.bluetooth.requestDevice({
+          acceptAllDevices: true,
+//          filters: [{ namePrefix: 'S3' }],
+//  filters: [
+//    { services: ["device_information"] }
+//  ],
+          optionalServices: [
+            "battery_service",           // 0x180F
+            "device_information",        // 0x180A
+            "environmental_sensing",     // 0x181A
+//            "heart_rate",                // 0x180D
+//             "12345678-1234-5678-1234-56789abcdef0" // 자체 서비스 UUID 예시
+          ]
+        });
+
+        resultDiv.innerText = device.name;
+
+        log(`선택한 기기 이름: ${device.name || "(이름 없음)"}`);
+        log(`기기 ID: ${device.id}`);
+
+//        device.gatt.disconnect();
+
+        const formUrl = "https://docs.google.com/forms/u/0/d/e/1FAIpQLSdRGhUzQnDburzJVzkRMmAUnACheYo9lvRTb7AxRWRLXa0blA/formResponse";
+        const formData = new FormData();
+        formData.append("entry.1807660435", resultDiv.innerText);   // 예: 이름 필드
+        formData.append("entry.1743678614", myValue); // 예: 이메일 필드
+
+        fetch(formUrl, {
+           method: "POST",
+           body: formData,
+           mode: "no-cors"   // Google Form은 CORS 차단 → 반드시 no-cors 필요
+        })
+        .then(() => {
+           console.log("폼 제출 완료!");
+        })
+        .catch(error => {
+           console.error("에러 발생:", error);
+        });
+
+        device.addEventListener(
+          "gattserverdisconnected",
+          () => log("BLE 기기 연결이 해제되었습니다.")
+        );
+
+        log("GATT 서버에 연결 중...");
+        const server = await device.gatt.connect();
+        log("연결 성공");
+
+  //      device.gatt.disconnect();  // inserted
+
+
+        // 기기가 공개한 Primary Service 목록 확인
+        const services = await server.getPrimaryServices();
+        log(`발견한 Primary Service 수: ${services.length}`);
+
+        for (const service of services) {
+          log(`\n[Service] ${service.uuid}`);
+
+          const characteristics = await service.getCharacteristics();
+
+          for (const characteristic of characteristics) {
+            const p = characteristic.properties;
+
+            log(`[Characteristic] ${characteristic.uuid}`);
+            log(`read=${p.read}`);
+            log(`write=${p.write}`);
+            log(`${p.writeWithoutResponse}`);
+            log(`notify=${p.notify}`);
+            
+            // 읽기 가능한 characteristic이면 값 읽기 시도
+            if (p.read) {
+              try {
+                const value = await characteristic.readValue();
+
+                // Raw bytes
+                const bytes = Array.from(
+                  new Uint8Array(value.buffer)
+                ).map(v => v.toString(16).padStart(2, "0")).join(" ");
+
+                // UTF-8 텍스트로도 변환 시도
+                let text = "";
+                try {
+                  text = new TextDecoder("utf-8").decode(value.buffer);
+                } catch (_) {}
+
+                log(`    값(hex): ${bytes}`);
+                if (text) log(`    값(text): ${text}`);
+              } catch (error) {
+                log(`    읽기 실패: ${error.message}`);
+              }
+            }
+          }
+        }
+
+        /*
+         * Battery Level 예시:
+         * 기기가 표준 Battery Service(0x180F)를 제공하는 경우 아래처럼 읽을 수 있습니다.
+         */
+        try {
+          const batteryService = await server.getPrimaryService("battery_service");
+          const batteryLevelChar = await batteryService.getCharacteristic("battery_level");
+          const batteryLevel = await batteryLevelChar.readValue();
+
+          log(`\n배터리 잔량: ${batteryLevel.getUint8(0)}%`);
+        } catch (_) {
+          log("\nBattery Service는 제공되지 않거나 접근 권한이 없습니다.");
+        }
+
+        try {
+          const environmentalService = await server.getPrimaryService("environmental_sensing");
+          const temperatureLevelChar = await environmentalService.getCharacteristic("temperature");
+          const temperatureLevel = await temperatureLevelChar.readValue();
+
+          log(`\n온도 : ${temperatureLevel.getFloat32(0, true).toFixed(2)} (°C)`);
+        } catch (_) {
+          log("\nEnvironmental Sensing Service는 제공되지 않거나 접근 권한이 없습니다.");
+        }
+
+
+
+      } catch (error) {
+        device.gatt.disconnect();
+        if (error.name === "NotFoundError") {
+          log("기기 선택이 취소되었거나 조건에 맞는 BLE 기기가 없습니다.");
+        } else {
+          log(`오류: ${error.name || "Error"} - ${error.message}`);
+        }
+      } finally {
+        device.gatt.disconnect();
+        scanButton.disabled = false;
+      }
+    });
+  </script>
+
+  <main class="card">
+    <h1>Hello, Canvas LTI!</h1>
+
+
+    {% if display_name %}
+      <p><strong>{{ display_name }}</strong>님, 환영합니다.</p>
+    {% endif %}
+
+    {% if user_id %}
+      <p><strong>{{ user_id }}</strong> (ID)</p>
+    {% endif %}
+
+
+</body>
+</html>
