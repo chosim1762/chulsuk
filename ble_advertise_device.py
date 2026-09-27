@@ -43,8 +43,16 @@ def advertising_payload(name=None, services=None):
 # -------------------------------------------------------
 # BLE 설정
 # -------------------------------------------------------
-DEVICE_NAME = "ENGR-LAB"
+DEVICE_NAME = "ENGR-LAB1"
 ADV_INTERVAL_US = 250_000  # 250 ms
+
+# 0x0340: Generic Heart Rate Sensor
+_APPEARANCE_GENERIC_COMPUTER = const(0x0080)
+
+# Generic access
+_UUID_GENERIC_ACCESS = bluetooth.UUID(0x1800)
+_UUID_DEVICE_NAME = bluetooth.UUID(0x2A00)
+_UUID_APPEARANCE = bluetooth.UUID(0x2A01)
 
 # 표준 Device Information Service
 _UUID_DIS = bluetooth.UUID(0x180A)
@@ -65,6 +73,16 @@ _UUID_TEMPERATURE = bluetooth.UUID(0x2A6E)
 _READ = bluetooth.FLAG_READ
 
 # GATT 서비스 정의
+_GENERIC_ACCESS_SERVICE = (
+    _UUID_GENERIC_ACCESS,
+    (
+        # Device Name: Read
+        (_UUID_DEVICE_NAME, _READ),
+        # Appearance: Read
+        (_UUID_APPEARANCE, _READ),
+    ),
+)
+
 _DIS_SERVICE = (
     _UUID_DIS,
     (
@@ -104,7 +122,7 @@ class DeviceInformationBLE:
         self.ble.irq(self._irq)
 
         # GATT 서비스 등록 후 각 characteristic value handle 획득       
-        handles = self.ble.gatts_register_services((_DIS_SERVICE,_BATTERY_SERVICE,_ESS_SERVICE,))
+        handles = self.ble.gatts_register_services((_DIS_SERVICE,_BATTERY_SERVICE,_ESS_SERVICE,_GENERIC_ACCESS_SERVICE,))
         
         self._manufacturer_handle = handles[0][0]
         self._model_handle = handles[0][1]
@@ -116,6 +134,13 @@ class DeviceInformationBLE:
         
         self.temperature_handle = handles[2][0]
         self.set_environment(temperature_c=10.00, notify=False)
+        
+        self.device_name_handle = handles[3][0]
+        self.appearance_handle = handles[3][1]
+        
+        
+        self.ble.gatts_write(self.device_name_handle, DEVICE_NAME.encode())
+        self.ble.gatts_write(self.appearance_handle, struct.pack("<H", _APPEARANCE_GENERIC_COMPUTER))
         
         # Device Information 값 입력
         self.ble.gatts_write(self._manufacturer_handle, b"KU Engr")
@@ -142,7 +167,7 @@ class DeviceInformationBLE:
     def _advertise(self):
         adv_data = advertising_payload(
             name=DEVICE_NAME,
-            services=[0x180A, 0x180F, 0x181A],  # Device Information Service 0x180A
+            services=[0x180A, 0x180F, 0x181A, 0x1800],  # Device Information Service 0x180A
                                                 # Battery 0x180F, Environmental Sensing 0x181A
         )
         self.ble.gap_advertise(ADV_INTERVAL_US, adv_data=adv_data)
