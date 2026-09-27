@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title> 기초공학실험 오프라인 실험실 이용여부 출첵</title>
+</head>
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<body>
+  <button id="connectBtn">출석용 비콘 검색하기</button>
+  <button type="button" id="moveButton">출석체크하러가기</button>
+  <div id="status">상태: 대기 중</div>
+  <div id="result"></div>
+  <div id="resultDiv"></div>
+  <div id="platform"></div>
+  <div id="os_info"></div>
+
+  <script>
+    // 기기 정보 출력 예제
+    console.log("User Agent:", navigator.userAgent);
+    console.log("브라우저 언어:", navigator.language);
+    console.log("플랫폼:", navigator.platform);
+    console.log("온라인 여부:", navigator.onLine ? "온라인" : "오프라인");
+    console.log("쿠키 허용 여부:", navigator.cookieEnabled);
+
+    // 화면 관련 정보
+    console.log("화면 너비:", window.screen.width);
+    console.log("화면 높이:", window.screen.height);
+    console.log("색상 깊이:", window.screen.colorDepth);
+
+    // 하드웨어 관련 정보
+    console.log("CPU 코어 수:", navigator.hardwareConcurrency);
+    console.log("메모리(GB):", navigator.deviceMemory);
+
+
+    const connectBtn = document.getElementById('connectBtn');
+    const statusDiv = document.getElementById('status');
+    const myValue = "{{ lis_person_sourcedid }}";
+    result.innerText = "ID: " + myValue;
+    platform_os = navigator.platform;
+    platform_agent = navigator.userAgent;
+    platform.innerText = "Platform: " + platform_os;
+    os_info.innerText = platform_agent;
+
+    const currentUrl = window.location.href;
+    console.log(currentUrl);
+
+/*    if ((platform_os.indexOf('Linux') >= 0) || (platform_os.indexOf('Win') >= 0)) {
+        $("#moveButton").hide();
+    }*/
+
+    if (currentUrl=='https://ndlsensor.ddns.net:8000/lti/') {
+        $("#connectBtn").hide();
+    }
+
+    if (currentUrl=='https://ndlsensor.ddns.net:8000/lti/ble/') {
+        $("#moveButton").hide();
+    }
+
+    document.getElementById("moveButton").addEventListener("click", function () {
+       window.open("https://ndlsensor.ddns.net:8000/lti/" + myValue + "/", "_blank");
+    });
+
+    // 접근하려는 Custom Service 또는 Standard Service UUID 설정
+    // Generic Access Service(0x1800), Battery Service(0x180f)
+    const TARGET_SERVICE_UUID = 'battery_service'; 
+    // 또는 '0000180f-0000-1000-8000-00805f9b34fb'
+
+    connectBtn.addEventListener('click', async () => {
+      try {
+        statusDiv.innerText = '상태: 기기 탐색 중...';
+
+        // 1. requestDevice 호출 시 optionalServices를 반드시 지정합니다.
+        const device = await navigator.bluetooth.requestDevice({
+//          filters: [{ namePrefix: 'ENGR' }],
+//            filters: [{ services: [0x1800, 0x180f, '8b599ea2-e050-42d8-8a52-df9de3f3f34b']}],
+//            filters: [{ services: [0x1800, 0x180f,   '74278bda-b644-4520-8f0c-720eaf059935']}],
+            acceptAllDevices: true, // 모든 기기 탐색
+            optionalServices: ['generic_access','battery_service', '74278bda-b644-4520-8f0c-720eaf059935']
+        });
+
+        statusDiv.innerText = `상태: ${device.name || '알 수 없는 기기'} 선택됨. GATT 연결 시도...`;
+
+        resultDiv.className = 'success';
+        resultDiv.innerText = device.name;
+        console.log('선택된 기기 정보:', device);
+//        device.gatt.disconnect();
+
+        const formUrl = "https://docs.google.com/forms/u/0/d/e/1FAIpQLSdRGhUzQnDburzJVzkRMmAUnACheYo9lvRTb7AxRWRLXa0blA/formResponse";
+        const formData = new FormData();
+        formData.append("entry.1807660435", resultDiv.innerText);   // 예: 이름 필드
+        formData.append("entry.1743678614", myValue); // 예: 이메일 필드
+
+        fetch(formUrl, {
+           method: "POST",
+           body: formData,
+           mode: "no-cors"   // Google Form은 CORS 차단 → 반드시 no-cors 필요
+        })
+        .then(() => {
+           console.log("폼 제출 완료!");
+        })
+        .catch(error => {
+           console.error("에러 발생:", error);
+        });
+
+        // 이전 연결 잔재 제거
+        if (device.gatt.connected) {
+          device.gatt.disconnect();
+        }
+
+        // 2. 타임아웃을 적용한 GATT 연결
+        const gattServer = await connectWithTimeout(device.gatt, 10000);
+        statusDiv.innerText = '상태: GATT 서버 연결 성공! 서비스 탐색 중...';
+
+        // 3. 서비스 가져오기
+        const service = await gattServer.getPrimaryService(TARGET_SERVICE_UUID);
+        statusDiv.innerText = '상태: 서비스 및 특성 로드 완료!';
+ 
+        console.log('Connected Device:', device);
+        console.log('GATT Server:', gattServer);
+        console.log('Service:', service);
+        device.gatt.disconnect()
+      } catch (error) {
+        console.error('BLE 연결 오류:', error);
+        statusDiv.innerText = `오류 발생: ${error.message || error}`;
+      }
+    });
+
+    // 타임아웃 처리 함수
+    function connectWithTimeout(gatt, ms) {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error('GATT 연결 시간이 초과되었습니다. (Timeout)'));
+        }, ms);
+
+        gatt.connect()
+          .then(server => {
+            clearTimeout(timer);
+            resolve(server);
+          })
+          .catch(err => {
+            clearTimeout(timer);
+            reject(err);
+          });
+      });
+    }
+  </script>
+</body>
+</html>
